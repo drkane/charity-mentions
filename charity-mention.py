@@ -27,7 +27,7 @@ class TwitterAPI:
         return self.api.mentions_timeline()
 
 def test_for_regno(message):
-    regno_regex = '\b[1-9][0-9]{5,6}|SC[O0-9]{5}\b'
+    regno_regex = r'\b([1-9][0-9]{5,6}|SC[O0-9]{5})\b'
     return re.findall(regno_regex, message)
 
 def test_for_search(message):
