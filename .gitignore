@@ -1,0 +1,12 @@
+
+*.cfg
+!example.cfg
+*.json
+*.zip
+.cache/
+__pycache__/
+.env
+ev
+nohup.out
+*.gz
+env/
