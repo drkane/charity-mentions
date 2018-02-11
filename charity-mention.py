@@ -9,7 +9,9 @@ import re
 from datetime import datetime
 import requests
 
-CHARITYBASE_URL = 'https://charitybase.uk/api/v0.2.0/charities'
+FINDTHATCHARITY_URL = 'https://findthatcharity.uk/charity/{}.json'
+FINDTHATCHARITY_SEARCH_URL = 'https://findthatcharity.uk/'
+FINDTHATCHARITY_RECONCILE_URL = 'https://findthatcharity.uk/reconcile'
 TWITTER_USERNAME = 'CharityRandom'
 
 # connect to twitter API and tweet
@@ -37,46 +39,58 @@ def test_for_search(message):
         return match.group(1)
 
 def get_charity(regno):
-    params = {
-        "charityNumber": regno.replace('SCO', 'SC0'),
-        "subNumber": 0,
-        "fields": "mainCharity,registration",
-        "limit": 1,
-    }
-    r = requests.get(CHARITYBASE_URL, params=params)
-    result = r.json()
-    if len(result.get("charities",[]))>0:
-        return result["charities"][0]
+    regno = regno.replace('SCO', 'SC0')
+    r_url = FINDTHATCHARITY_URL.format(regno)
+    r = requests.get(r_url)
+    if r.status_code == requests.codes.ok:
+        result = r.json()
+        if result:
+            return result
 
 def charity_search(search):
     params = {
-        "registered": True,
-        "search": search,
-        "fields": "mainCharity,registration",
-        "sort": "-mainCharity.income",
-        "limit": 1
+        "query": search
     }
-    r = requests.get(CHARITYBASE_URL, params=params)
-    result = r.json()
-    if len(result.get("charities",[]))>0:
-        return result["charities"][0]
+    r = requests.get(FINDTHATCHARITY_RECONCILE_URL, params=params)
+    if r.status_code == requests.codes.ok:
+        result = r.json()
+        if len(result.get("result",[]))>0:
+            return result["result"][0]["source"]
 
-def make_message(charity, user):
-    if charity.get("registered"):
-        template = '@{username} {name} [{regno}] reg {registered_year} {website}'
+def make_message(char_data, user):
+    char = {
+        "title": char_data["known_as"]
+    }
+
+    if char_data.get("ccew_number"):
+        regno = char_data["ccew_number"]
+        char["website"] = 'http://beta.charitycommission.gov.uk/charity-details/?regid={}&subid=0'.format(regno)
+        char["title"] = char["title"]
+    elif char_data.get("ccni_number"):
+        regno = "NIC{}".format(char_data["ccni_number"].replace("NIC", ""))
+        char["website"] = char_data["ccni_link"]
+    elif char_data.get("oscr_number"):
+        regno = char_data["oscr_number"]
+        char["website"] = char_data["oscr_link"]
+
+    if char_data["url"] and char_data["url"] != "":
+        char["website"] = char_data["url"]
+
+    # correct common misformed URL in websites
+    # @todo - make this a bit more robust
+    if char["website"][0:4]!="http":
+        char["website"] = "http://" + char["website"]
+    
+    if char_data.get("active"):
+        template = '@{username} {name} [{regno}] {website}'
     else:
         template = '@{username} {name} [{regno} removed charity] {website}'
 
-    website = charity.get("mainCharity", {}).get("website")
-    if not website or website=="":
-        website = 'http://beta.charitycommission.gov.uk/charity-details/?regid={regno}&subid=0'.format(regno=charity.get("charityNumber"))
-
     return template.format(
                            username = user,
-                           name=charity.get("name"),
-                           regno=charity.get("charityNumber"),
-                           registered_year=charity.get("registration", [{}])[0].get("regDate","")[0:4],
-                           website=website
+                           name=char["title"],
+                           regno=regno,
+                           website=char["website"]
                            )
 
 if __name__ == "__main__":
@@ -107,7 +121,13 @@ if __name__ == "__main__":
     print("Checking for new tweets every {} seconds".format( options.sleep ))
 
     while True:
-        mentions = twitter.get_mentions()
+        try:
+            mentions = twitter.get_mentions()
+        except tweepy.error.RateLimitError:
+            time.sleep(180)
+            print("<FAILED> Rate limit exceeded")
+            continue
+        
         for i in mentions:
 
             messages = []
@@ -138,13 +158,18 @@ if __name__ == "__main__":
             search = test_for_search(i.text)
             if search:
                 charity = charity_search(search)
+                ftc_search = requests.Request('GET', FINDTHATCHARITY_SEARCH_URL, params={"q": search}).prepare()
                 if not charity:
-                    messages.append("@{} Nothing found I'm afraid".format(i.user.screen_name))
+                    messages.append("@{} Nothing found I'm afraid. Try {}".format(
+                        i.user.screen_name, 
+                        ftc_search.url
+                    ))
 
                 else:
                     # construct the message
                     message = make_message(charity, i.user.screen_name)
                     if message:
+                        message += '. More results: {}'.format(ftc_search.url)
                         messages.append(message)
 
 
